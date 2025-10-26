@@ -1,4 +1,4 @@
-# Shoreline Extraction Toolbox (Segments)
+# Shoreline Extraction Toolbox (SE+)
 
 Automates shoreline extraction from a multispectral composite using **MNDWI + Otsu**, with adaptive smoothing, morphology cleanup, polygon→line conversion (keeps boundary), and projection to a target CRS.
 
