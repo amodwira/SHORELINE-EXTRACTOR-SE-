@@ -54,7 +54,7 @@ python -c "import arcpy, numpy; from skimage.filters import threshold_otsu, gaus
 
 ## Usage (ArcGIS Pro)
 1. Add the `.pyt` to your project (Catalog → **Add**).
-2. Open **Shoreline Extractor (Segments, keep boundary)**.
+2. Open **Shoreline Extractor**.
 3. Set parameters (see above) and **Run**.
 
 ## Tips & Troubleshooting
