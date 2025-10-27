@@ -29,8 +29,8 @@ class Tool(object):
         With support from Dr. Ahmmed Abdullah, PhD, Assistant Professor, Louisiana State University.
         Prof. Bernard Kumi-Boateng, PhD, Professor, University of Mines and Technology, Ghana.
 
-        '''        
-	self.canRunInBackground = False
+        '''
+        self.canRunInBackground = False
 
     def getParameterInfo(self):
         """Tool parameters (fully automated smoothing parameters are hidden)."""
@@ -519,5 +519,5 @@ class Tool(object):
             return
 
     def postExecute(self, parameters):
-	"JUST BELIEVE"
+        "JUST BELIEVE"
         return
