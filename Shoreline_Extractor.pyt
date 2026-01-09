@@ -27,7 +27,7 @@ import warnings
 
 from arcpy.sa import *
 from skimage.filters import threshold_otsu, gaussian
-from skimage.morphology import disk, opening, closing, remove_small_objects
+from skimage.morphology import disk, opening, closing, remove_small_objects, remove_small_holes
 
 warnings.filterwarnings("ignore")
 
@@ -160,7 +160,7 @@ class Tool(object):
                 direction="Input",
             ),
             arcpy.Parameter(
-                displayName="Minimum polygon area (map units²)",
+                displayName="Minimum polygon area (m²) [geodesic]",
                 name="min_poly_area",
                 datatype="GPDouble",
                 parameterType="Optional",
@@ -336,6 +336,19 @@ class Tool(object):
                     small_pixels = max(8, morph_radius * morph_radius)
                     binary_bool = remove_small_objects(binary_bool.astype(bool), min_size=small_pixels)
                     binary_bool = closing(binary_bool, selem)
+
+                    # Fill holes using PIXELS only (auto) — do NOT tie to min_polygon_area (m²)
+                    if cs <= 10:
+                        hole_px = 200
+                    elif cs <= 30:
+                        hole_px = 120
+                    else:
+                        hole_px = 80
+
+                    binary_bool = remove_small_holes(binary_bool.astype(bool), area_threshold=int(hole_px))
+                    messages.addMessage(f"Filled holes <= {hole_px}px.")
+
+
                     messages.addMessage(f"Morphology: open/remove_small/close (r={morph_radius}px).")
             except Exception as e:
                 messages.addWarningMessage("Morphological cleanup failed/partial: " + str(e))
@@ -417,10 +430,13 @@ class Tool(object):
                     desc = arcpy.Describe(valid_polygons)
                     oid_field = desc.OIDFieldName
                     keep_oids = []
-                    with arcpy.da.SearchCursor(valid_polygons, [oid_field, "SHAPE@AREA"]) as scur:
-                        for oid, area in scur:
-                            if area is not None and area >= min_polygon_area:
-                                keep_oids.append(oid)
+
+                    with arcpy.da.SearchCursor(valid_polygons, [oid_field, "SHAPE@"]) as scur:
+                        for oid, geom in scur:
+                            if geom:
+                                area_m2 = geom.getArea("GEODESIC", "SQUAREMETERS")
+                                if area_m2 >= float(min_polygon_area):
+                                    keep_oids.append(oid)
                     if keep_oids:
                         where = f'"{oid_field}" IN ({",".join(map(str, keep_oids))})'
                         arcpy.MakeFeatureLayer_management(valid_polygons, "valid_lyr")
@@ -428,7 +444,7 @@ class Tool(object):
                         arcpy.CopyFeatures_management("valid_lyr", filtered_polygons)
                         arcpy.Delete_management("valid_lyr")
                         valid_polygons = filtered_polygons
-                        messages.addMessage(f"Removed small polygons < {min_polygon_area:.2f} (map units²).")
+                        messages.addMessage(f"Removed small polygons < {min_polygon_area:.2f} m² (geodesic).")
                     else:
                         messages.addWarningMessage("No polygons met min area; kept originals.")
                 else:
@@ -460,6 +476,50 @@ class Tool(object):
                     messages.addMessage("Mask boundary from raster extent created.")
             except Exception as e:
                 messages.addWarningMessage("Failed to create mask boundary: " + str(e))
+
+            # -------------------------------
+            # Keep ONLY the ocean-connected water (to avoid inland waterbodies)
+            # -------------------------------
+            ocean_polygons = "in_memory/ocean_polygons"
+            try:
+                if arcpy.Exists(ocean_polygons):
+                    arcpy.Delete_management(ocean_polygons)
+
+                arcpy.MakeFeatureLayer_management(valid_polygons, "wpoly_lyr")
+
+                # Select water polygons that touch the study-area/extent boundary (ocean will)
+                if arcpy.Exists(mask_boundary):
+                    arcpy.SelectLayerByLocation_management(
+                        "wpoly_lyr", "INTERSECT", mask_boundary, selection_type="NEW_SELECTION"
+                    )
+
+                # If nothing touches boundary, fallback to using all water polygons
+                sel_count = int(arcpy.GetCount_management("wpoly_lyr").getOutput(0))
+                if sel_count == 0:
+                    messages.addWarningMessage("No boundary-touching water found; falling back to largest water polygon overall.")
+                    arcpy.SelectLayerByAttribute_management("wpoly_lyr", "CLEAR_SELECTION")
+
+                # Pick the single largest polygon (this is typically the Gulf/ocean water)
+                oid_field = arcpy.Describe(valid_polygons).OIDFieldName
+                best_oid, best_area = None, -1.0
+                with arcpy.da.SearchCursor("wpoly_lyr", [oid_field, "SHAPE@AREA"]) as cur:
+                    for oid, area in cur:
+                        if area is not None and area > best_area:
+                            best_oid, best_area = oid, area
+
+                if best_oid is None:
+                    raise RuntimeError("No water polygons available after filtering.")
+
+                arcpy.SelectLayerByAttribute_management("wpoly_lyr", "NEW_SELECTION", f'"{oid_field}" = {best_oid}')
+                arcpy.CopyFeatures_management("wpoly_lyr", ocean_polygons)
+                arcpy.Delete_management("wpoly_lyr")
+
+                # From here onward, treat valid_polygons as ONLY ocean water
+                valid_polygons = ocean_polygons
+                messages.addMessage(f"Ocean water selected (OID={best_oid}, area={best_area:.2f}).")
+
+            except Exception as e:
+                messages.addWarningMessage("Ocean-only filtering failed; continuing with all water polygons: " + str(e))
 
             # Dissolve water → boundary-only shoreline segments
             try:
